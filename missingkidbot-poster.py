@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 import os, sys
+import gzip
 import configparser
 import json
 import boto3
@@ -12,6 +13,7 @@ from bs4 import BeautifulSoup
 POSTERBASE='http://www.missingkids.com/poster/NCMC'
 LOCKFILE='missingkidbot.lock'
 LOCATIONS='locations.json'
+STATEFILE='state.json.gz'
 
 '''
 DONE:
@@ -63,6 +65,10 @@ def main():
 	# Read in mapping from zip code to subreddit
 	with open(LOCATIONS,'r') as f:
 		locations = json.load(f)
+
+	# Read in state from previous runs.
+	with gzip.open(STATE, 'rb') as f:
+		state = json.load(f)
 
 	# Read in the credentials. 
 	config = configparser.ConfigParser()
@@ -134,7 +140,7 @@ def main():
 				allPosterInfo[posterInfo['Case Number']]['subreddits'] = subreddits.union(allPosterInfo[posterInfo['Case Number']]['subreddits'])
 			# This shouldn't happen but we'll build in some logic to handle this just in case.
 			if 'areas' not in allPosterInfo[posterInfo['Case Number']]:
-				allPosterInfo[posterInfo['Case Number']]['subreddits'] = [area]
+				allPosterInfo[posterInfo['Case Number']]['areas'] = [area]
 			else: 
 				allPosterInfo[posterInfo['Case Number']]['areas'].append(area)
 
@@ -142,26 +148,56 @@ def main():
 		object.delete()
 
 	for posterInfo in allPosterInfo.values():
+		# Track whether or not to add an entirely new case to the state file.
+		addState = False
+		
+		# Cast the subreddits back to a list so that they can be dumped to JSON later on.
+		posterInfo['subreddits'] = list(posterInfo['subreddits'])
+
 		# Post the initial alert to reddit within the proper regional subreddits.
 		reddit = praw.Reddit(client_id=config['missingkidbot']['client_id'], client_secret=config['missingkidbot']['client_secret'], password=config['missingkidbot']['password'], user_agent=config['missingkidbot']['user_agent'], username=config['missingkidbot']['username'])
 
 		# Replace "area" with an actual list of all the areas that correspond to zip codes that matched this alert.
 		title = "Missing Child Alert in %s: %s" % (posterInfo['areas'].join(', '), posterInfo['Name'])
 		url = getURL(posterInfo)
+
 		# Only post if there is a valid URL.
 		if url:
+			if posterInfo['Case Number'] not in state.keys()
+				# This is a totally new case not kept track of in the state file.
+				addState = True
 			for subreddit in posterInfo['subreddits']:
+				# Check if we've already posted to this subreddit.
+				if not addState:
+					if subreddit in state[posterInfo['Case Number']]['subreddits']:
+						# Already posted to this subreddit.  Refrain from reposting.
+						continue
 				# For testing
 				subreddit = 'reddit_api_test'
 				# Try posting 5 times before giving up.
 				for tries in range(5):
 					try:
 						reddit.subreddit(subreddit).submit(title, url=url)
+						'''
+						If the above line executes without raising an exception
+						we have a success and should update the state if this is 
+						a subreddit we haven't posted to before.
+						Since the conditional above has us skip reposts, we should
+						be good to do this.  Unless we're waiting to add the entire case.
+						'''
+						if not addState:
+							state[posterInfo['Case Number']]['subreddits'].append(subreddit)
 						break
 					except:
 						# Try waiting a little over 10 minutes
 						sleep(10.25*60)
+		if addState:	
+			state[posterInfo['Case Number']] = posterInfo
 
+	# Save out current state of postings.
+	with gzip.open(STATEFILE, 'wb') as f:
+    		json.dump(state, f)
+	
 	# Allow other instatiations of this script to start.
 	os.remove(LOCKFILE)	
 
