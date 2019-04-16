@@ -1,5 +1,11 @@
 {
 	"94602": 
 		{ "area":"Oakland",
-		"subreddits": ["oakland","bayarea","eastbay"] }
+		"subreddits": ["oakland","bayarea","eastbay"] },
+	"90012": 
+		{ "area":"Los Angeles",
+		"subreddits": ["LosAngeles"] },
+	"94102": 
+		{ "area":"San Francisco",
+		"subreddits": ["sanfrancisco","bayarea"] }
 }
