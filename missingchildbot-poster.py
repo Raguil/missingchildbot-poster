@@ -11,7 +11,7 @@ from time import sleep
 from bs4 import BeautifulSoup
 
 POSTERBASE='http://www.missingkids.com/poster/NCMC'
-LOCKFILE='missingkidbot.lock'
+LOCKFILE='missingchildbot.lock'
 LOCATIONS='locations.json'
 STATEFILE='state.json.gz'
 
@@ -67,8 +67,11 @@ def main():
 		locations = json.load(f)
 
 	# Read in state from previous runs.
-	with gzip.open(STATE, 'rb') as f:
-		state = json.load(f)
+	if os.path.exists(STATEFILE):
+		with gzip.open(STATEFILE, 'r') as f:
+			state = json.load(f)
+	else:
+		state = {}
 
 	# Read in the credentials. 
 	config = configparser.ConfigParser()
@@ -82,6 +85,8 @@ def main():
 	# Read in all messages and put poster info in a dictionary, with case numbers for keys.
 	allPosterInfo = {}
 	for obj in bucket.objects.all():
+		### DEBUG
+		print("OBJECT: %s" % str(obj.key))
 		object = s3.Object(config['aws']['bucket'],obj.key)
 		fetchedObject = object.get()
 		msg = email.message_from_bytes(fetchedObject['Body'].read())
@@ -102,6 +107,13 @@ def main():
 								tmpKey = cell.string.strip(':')
 							elif tmpKey:
 								posterInfo[tmpKey] = cell.string.strip('\n')
+		# Leave new signups alone.
+		elif 'ADAM Program Verification' in msg['Subject'] or 'ADAM Program Conformation' in msg['Subject']:
+			continue
+		
+		### DEBUG
+		print(posterInfo)
+
 		# FOR FUTURE REFERENCE
 		# Message is a poster recall announcement with no poster
 		#if not msg.is_multipart() and 'Missing Child Poster Notification:' in msg['Subject']:
@@ -109,7 +121,7 @@ def main():
 		# This is not an alert to put up a missing child poster.
 		# Delete the object and ignore.
 		if not posterInfo:
-			object.delete()
+			#object.delete()
 			continue
 
 		# Only add to the list of posters to put up if we haven't seen this case before.
@@ -125,6 +137,10 @@ def main():
 		else:
 			# Can't determine where to post, continue
 			continue
+
+		### Debug
+		print(zipCode)
+		print(subreddits)
 
 		if posterInfo['Case Number'] not in allPosterInfo:
 			if 'subreddits' not in posterInfo:
@@ -145,7 +161,9 @@ def main():
 				allPosterInfo[posterInfo['Case Number']]['areas'].append(area)
 
 		#Delete the message from the bucket here.
-		object.delete()
+		#object.delete()
+
+	print(allPosterInfo)
 
 	for posterInfo in allPosterInfo.values():
 		# Track whether or not to add an entirely new case to the state file.
@@ -158,22 +176,27 @@ def main():
 		reddit = praw.Reddit(client_id=config['missingkidbot']['client_id'], client_secret=config['missingkidbot']['client_secret'], password=config['missingkidbot']['password'], user_agent=config['missingkidbot']['user_agent'], username=config['missingkidbot']['username'])
 
 		# Replace "area" with an actual list of all the areas that correspond to zip codes that matched this alert.
-		title = "Missing Child Alert in %s: %s" % (posterInfo['areas'].join(', '), posterInfo['Name'])
+		title = "Missing Child Alert in %s: %s" % (', '.join(posterInfo['areas']), posterInfo['Name'])
 		url = getURL(posterInfo)
 
 		# Only post if there is a valid URL.
 		if url:
-			if posterInfo['Case Number'] not in state.keys()
+			if posterInfo['Case Number'] not in state.keys():
 				# This is a totally new case not kept track of in the state file.
 				addState = True
+				print("%s is new" % posterInfo['Name'])
 			for subreddit in posterInfo['subreddits']:
 				# Check if we've already posted to this subreddit.
 				if not addState:
 					if subreddit in state[posterInfo['Case Number']]['subreddits']:
+						print("%s is old, no repost" % posterInfo['Name'])
 						# Already posted to this subreddit.  Refrain from reposting.
 						continue
+				### DEBUG
+				print("ACTUAL SUBREDDIT: %s" % subreddit)
+				#continue
 				# For testing
-				subreddit = 'reddit_api_test'
+				#subreddit = 'reddit_api_test'
 				# Subscribe to the subreddit if you're not already in it.
 				if subreddit not in list(reddit.user.subreddits(limit=None)):
 					reddit.subreddit(subreddit).subscribe()
@@ -198,7 +221,7 @@ def main():
 			state[posterInfo['Case Number']] = posterInfo
 
 	# Save out current state of postings.
-	with gzip.open(STATEFILE, 'wb') as f:
+	with gzip.open(STATEFILE, 'wt') as f:
     		json.dump(state, f)
 	
 	# Allow other instatiations of this script to start.
